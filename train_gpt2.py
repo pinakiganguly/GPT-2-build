@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from transformers import GPT2LMHeadModel
+import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-class MLP(nn.module):
-    def __init(self, config):
+class MLP(nn.Module):
+    def __init__(self, config):
         super().__init__()
         self.c_fc = nn.Linear(config.n_embd, 4*config.n_embd)
         self.gelu = nn.GELU(approximate='tanh')
@@ -32,13 +33,14 @@ class CausalSelfAttention(nn.Module):    #Attention in LLM is generally what we 
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         # regularization
-        self.attn_dropout = nn.Dropout(config.attn_pdrop)
-        self.resid_dropout = nn.Dropout(config.resid_pdrop)
+        # self.attn_dropout = nn.Dropout(config.attn_pdrop)
+        # self.resid_dropout = nn.Dropout(config.resid_pdrop)
         # causal mask to ensure that attention is only applied to the left in the input sequence
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
-        # self.n_head = config.n_head
-        # self.n_embd = config.n_embd
+        
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -102,7 +104,7 @@ class GPT(nn.Module):
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(    #just replicating the same transformer that we saw when we took it from hugging face
-            wte = nn.Embedding(config.vocab_size, config.n_embed),
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList(Block(config) for _ in range(config.n_layer)),
             ln_f = nn.LayerNorm(config.n_embd),
@@ -111,10 +113,9 @@ class GPT(nn.Module):
     
 
     @classmethod
-    def from_pretrained(cls, mode₮_type):
+    def from_pretrained(cls, model_type):
         """Loads pretrained GPT-2 model weights from huggingface"""
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
         # n_layer, n_head and n_embd are determined from model_type
@@ -142,8 +143,8 @@ class GPT(nn.Module):
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla nn.Linear.
         # this means that we have to transpose these weights when we import them
-        assert len(keys) == len(sd)
-        for k in keys:
+        assert len(sd_keys_hf) == len(sd_keys)
+        for k in sd_keys_hf:
             if any(k.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
                 assert sd_hf[k].shape[::-1] == sd[k].shape
