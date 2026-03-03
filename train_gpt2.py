@@ -111,6 +111,24 @@ class GPT(nn.Module):
         ))
         self.lm_head =  nn.Linear(config.n_embd, config.vocab_size, bias=False)
     
+    # before generating we need to forward it and will feed the forward function the token indices(idx)
+    def forward(self, idx):
+        #idx is of shape(B,T) -> B is batch dimension and T is the time dimension
+        B, T = idx.size()  #tokens are in sequences and these sequences are again stacked in batches for effcient computation.
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.block_size}"  #here block size is the sequece length, B and T are in a 2d space and each lenght of row is <= to the max sequennce length.
+        # forward the token and position embeddings
+        pos=torch.arange(0, T, dtype=torch.long, device=idx.device) #shape (T)
+        pos_emb=self.transformer.wpe(pos)
+        tok_emb=self.transformer.wte(idx)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x=block(x)
+        # forward the final layernorm and the classifier
+        x=self.transformer.ln_f(x)
+        logits=self.lm_head(x) # (B, T, vocab_size) #Here the model makes probability to find out which tokens comes next and predicts them.
+        return logits
+    
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -158,5 +176,55 @@ class GPT(nn.Module):
 
         return model
 
-model=GPT.from_pretrained('gpt2')
-print("Hey! It didn't crash")
+#-----------------------------------------------------------------------------------------------------
+
+device = "cpu"
+if torch.cuda.is_available():
+    device = 'cuda'
+elif hasattr(torch.backends,"mps") and torch.backends.mps.is_available():
+    device = 'mps'
+
+print(f"using device: {device}")
+
+num_return_sequences = 5
+max_length = 30
+
+# model=GPT.from_pretrained('gpt2')  #gpt2 model takes all the functionalities that are required by itself like the pretrained function, forward and other functions thata are reuqired for text generation.
+# print("Hey! It didn't crash")
+model=GPT(GPTConfig())
+model.eval()
+model.to(device) #just to shift the running environment from CPU to GPU
+
+import tiktoken # from openAI
+enc = tiktoken.get_encoding('gpt2') # tokenizer for gpt 2
+tokens = enc.encode("Hello, I am a language model,")
+tokens = torch.tensor(tokens, dtype=torch.long) #after tokenizing the whole text also we get 8 tokens, thats the thing its doing
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # Replicating that 8 tokens 5 times, just to match the num_sequence and get 5 different o/p
+x = tokens.to(device)
+
+# generate! right now x is (B, T) where B = 5, T = 8
+# set the seed to 42
+torch.manual_seed(42) # just to ensures your model’s randomness is repeatable, so results are consistent across runs.
+torch.cuda.manual_seed(42)
+while x.size(1) < max_length: #here we will add new indices to each row of the sequence i.e, meaning we are adding new texts in the existing text that we passed after transforming it into 5 x 8 dim matrix that we created.
+    # forward the model to get the logits
+    with torch.no_grad():   #this no_grad module of pytorch is generally declared not to keep any cache
+        logits = model(x) # (B, T, vocab_size)
+        # take the logits at the last position
+        logits = logits[ :, -1, :] # (B, vocab_size)
+        # get the probabilities
+        probs = F.softmax(logits, dim =- 1)
+        # do top-k sampling of 50 (huggingface pipeline default)
+        # topk_probs here becomes (5, 50), topk_indices is (5, 50)
+        topk_probs, topk_indices = torch.topk(probs, 50, dim =- 1) #we are taking top 50 probabilities and just ingoring and normalizing other tokens below 50 to 0 - just to keep the model on track
+        # select a token from the top-k probabilities
+        ix = torch.multinomial(topk_probs, 1) # (B, 1)
+        # gather the corresponding indices
+        xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+        # append to the sequence
+        x = torch.cat((x, xcol), dim=1)
+
+for i in range(num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens) # decoding the tokens back to its string format
+    print(">", decoded)
