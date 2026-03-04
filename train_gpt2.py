@@ -4,6 +4,8 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import tiktoken # from openAI
+import sys
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -186,6 +188,26 @@ elif hasattr(torch.backends,"mps") and torch.backends.mps.is_available():
 
 print(f"using device: {device}")
 
+device = 'cpu'
+
+enc=tiktoken.get_encoding('gpt2')
+with open('/content/GPT-2-build/input.txt','r') as f:
+  text = f.read()
+text = text[:1000]  #taking only the 1st 1000 tokens to tsrat with model training
+tokens=enc.encode(text)
+B, T = 4, 32        #creating this tension dimension for the batch layer -- smaller dimension created just for debugging
+buf = torch.tensor(tokens[:B*T+1])
+x=buf[:-1].view(B,T)  
+y= buf[1:].view(B,T)
+
+#get logits
+model=GPT(GPTConfig())
+model.to(device)
+logits = model(x)
+
+print(logits.shape)
+sys.exit(0)
+
 num_return_sequences = 5
 max_length = 30
 
@@ -195,7 +217,6 @@ model=GPT(GPTConfig())
 model.eval()
 model.to(device) #just to shift the running environment from CPU to GPU
 
-import tiktoken # from openAI
 enc = tiktoken.get_encoding('gpt2') # tokenizer for gpt 2
 tokens = enc.encode("Hello, I am a language model,")
 tokens = torch.tensor(tokens, dtype=torch.long) #after tokenizing the whole text also we get 8 tokens, thats the thing its doing
