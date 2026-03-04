@@ -114,7 +114,7 @@ class GPT(nn.Module):
         self.lm_head =  nn.Linear(config.n_embd, config.vocab_size, bias=False)
     
     # before generating we need to forward it and will feed the forward function the token indices(idx)
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         #idx is of shape(B,T) -> B is batch dimension and T is the time dimension
         B, T = idx.size()  #tokens are in sequences and these sequences are again stacked in batches for effcient computation.
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.block_size}"  #here block size is the sequece length, B and T are in a 2d space and each lenght of row is <= to the max sequennce length.
@@ -129,7 +129,11 @@ class GPT(nn.Module):
         # forward the final layernorm and the classifier
         x=self.transformer.ln_f(x)
         logits=self.lm_head(x) # (B, T, vocab_size) #Here the model makes probability to find out which tokens comes next and predicts them.
-        return logits
+        loss = None
+        if targets is not None:
+          loss = F.cross_entropy(logits.view(-1, logits.size(-1)),targets.view(-1)) #cross_entropy does not like multi dimensional inputs so its just breaking down the 3d logits to 2 dimensional and also transforming the targets to singe dimensional tesnor.
+          #here we get the loss ~10.9 and its expected to give around 10.8 = -ln(1/cab_size), so we can say roughly we are good with the initialization
+        return logits, loss
     
 
     @classmethod
@@ -180,6 +184,34 @@ class GPT(nn.Module):
 
 #-----------------------------------------------------------------------------------------------------
 
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+        with open('/content/GPT-2-build/input.txt','r') as f:
+          text = f.read()
+
+        enc=tiktoken.get_encoding('gpt2')
+        tokens=enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"loaded {len(self.tokens)} tokens")
+        print(f"l epoch = {len(self.tokens) // (B*T)} batches")
+
+        self.current_position=0
+
+        # get the shard filenames
+    def next_batch(self):  #creating batches in B*T
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position+B*T+1] # B*T+1 just to map with the inputs with target when we crated the tensors for the input and the target.
+        x = (buf[:-1]).view(B, T) # inputs
+        y = (buf[1:]).view(B, T) # targets
+        # advance the position in the tensor
+        self.current_position += B * T
+        # if loading the next batch would be out of bounds, advance to next shard
+        if self.current_position + (B * T + 1) > len(self.tokens):
+            self.current_position=0 #if we are just running out of data we can again reinitialize back to 0
+        return x, y
+
 device = "cpu"
 if torch.cuda.is_available():
     device = 'cuda'
@@ -188,24 +220,44 @@ elif hasattr(torch.backends,"mps") and torch.backends.mps.is_available():
 
 print(f"using device: {device}")
 
-device = 'cpu'
+# device = 'cpu' #override
 
-enc=tiktoken.get_encoding('gpt2')
-with open('/content/GPT-2-build/input.txt','r') as f:
-  text = f.read()
-text = text[:1000]  #taking only the 1st 1000 tokens to tsrat with model training
-tokens=enc.encode(text)
-B, T = 4, 32        #creating this tension dimension for the batch layer -- smaller dimension created just for debugging
-buf = torch.tensor(tokens[:B*T+1])
-x=buf[:-1].view(B,T)  
-y= buf[1:].view(B,T)
+#-------was just exploring with small dataset----------------------------------------------------------------------------------|
+# enc=tiktoken.get_encoding('gpt2')                                                                                            |
+# with open('/content/GPT-2-build/input.txt','r') as f:                                                                        |
+#   text = f.read()                                                                                                            |
+# text = text[:1000]  #taking only the 1st 1000 tokens to tsrat with model training                                            |
+# tokens=enc.encode(text)                                                                                                      |------> This whole thing is now in DataLoaderLite class
+# B, T = 4, 32        #creating this tensor dimension for the batch layer -- smaller dimension created just for debugging      |
+# buf = torch.tensor(tokens[:B*T+1]) #here the buf resides in CPU not to GPU                                                   |
+# buf = buf.to(device) #we cannot just do .to() because buff itself takes a new memory in the CPU so needs to be reinitialized |
+# x=buf[:-1].view(B,T)                                                                                                         |
+# y= buf[1:].view(B,T)                                                                                                         |
+#------------------------------------------------------------------------------------------------------------------------------|
+
+train_loader = DataLoaderLite(B=4, T=32)
 
 #get logits
 model=GPT(GPTConfig())
 model.to(device)
-logits = model(x)
+# logits, loss = model(x,y) # passing the labels as well to calculate the loss
 
-print(logits.shape)
+#Now we will perform the gradient and optimize the model and decrease the loss
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+for i in range(50):
+  x, y = train_loader.next_batch()
+  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU
+  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing
+  logits, loss = model(x, y)
+  loss.backward() #applies the gradients whenever there is a loss
+  optimizer.step() # update the parameters and decrease the loss
+  print(f"step {i}, loss : {loss.item()}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+
+
+
+# print(loss)
 sys.exit(0)
 
 num_return_sequences = 5
@@ -213,7 +265,6 @@ max_length = 30
 
 # model=GPT.from_pretrained('gpt2')  #gpt2 model takes all the functionalities that are required by itself like the pretrained function, forward and other functions thata are reuqired for text generation.
 # print("Hey! It didn't crash")
-model=GPT(GPTConfig())
 model.eval()
 model.to(device) #just to shift the running environment from CPU to GPU
 
