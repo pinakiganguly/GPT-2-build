@@ -112,6 +112,9 @@ class GPT(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head =  nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        #weight tying scheme applied - just to reduce the parameters , by using the same space for both the embeddings, which fine tunes the model for getting the similar learning space ---- meaning the input embedding matrix and output projection layer share the same weights.
+        self.transformer.wte.weight=self.lm_head.weight
     
     # before generating we need to forward it and will feed the forward function the token indices(idx)
     def forward(self, idx, targets=None):
@@ -204,11 +207,11 @@ class DataLoaderLite:
         B, T = self.B, self.T
         buf = self.tokens[self.current_position : self.current_position+B*T+1] # B*T+1 just to map with the inputs with target when we crated the tensors for the input and the target.
         x = (buf[:-1]).view(B, T) # inputs
-        y = (buf[1:]).view(B, T) # targets
+        y = (buf[1:]).view(B, T) # targets   --- refer inputs and outputs cell in play.ipynb
         # advance the position in the tensor
         self.current_position += B * T
         # if loading the next batch would be out of bounds, advance to next shard
-        if self.current_position + (B * T + 1) > len(self.tokens):
+        if self.current_position + (B * T + 1) > len(self.tokens):   # --- refer inputs and outputs cell in play.ipynb
             self.current_position=0 #if we are just running out of data we can again reinitialize back to 0
         return x, y
 
@@ -222,18 +225,18 @@ print(f"using device: {device}")
 
 # device = 'cpu' #override
 
-#-------was just exploring with small dataset----------------------------------------------------------------------------------|
-# enc=tiktoken.get_encoding('gpt2')                                                                                            |
-# with open('/content/GPT-2-build/input.txt','r') as f:                                                                        |
-#   text = f.read()                                                                                                            |
-# text = text[:1000]  #taking only the 1st 1000 tokens to tsrat with model training                                            |
-# tokens=enc.encode(text)                                                                                                      |------> This whole thing is now in DataLoaderLite class
-# B, T = 4, 32        #creating this tensor dimension for the batch layer -- smaller dimension created just for debugging      |
-# buf = torch.tensor(tokens[:B*T+1]) #here the buf resides in CPU not to GPU                                                   |
-# buf = buf.to(device) #we cannot just do .to() because buff itself takes a new memory in the CPU so needs to be reinitialized |
-# x=buf[:-1].view(B,T)                                                                                                         |
-# y= buf[1:].view(B,T)                                                                                                         |
-#------------------------------------------------------------------------------------------------------------------------------|
+#-------was just exploring with small dataset---------------------------------------------------------------------------------------|
+# enc=tiktoken.get_encoding('gpt2')                                                                                                 |
+# with open('/content/GPT-2-build/input.txt','r') as f:                                                                             |
+#   text = f.read()                                                                                                                 |
+# text = text[:1000]  #taking only the 1st 1000 tokens to tsrat with model training                                                 |
+# tokens=enc.encode(text)                                                                                                           |------> This whole thing is now in DataLoaderLite class
+# B, T = 4, 32        #creating this tensor dimension for the batch layer -- smaller dimension created just for easy debugging      |
+# buf = torch.tensor(tokens[:B*T+1]) #here the buf resides in CPU not to GPU                                                        |
+# buf = buf.to(device) #we cannot just do .to() because buff itself takes a new memory in the CPU so needs to be reinitialized      |
+# x=buf[:-1].view(B,T)                                                                                                              |
+# y= buf[1:].view(B,T)                                                                                                              |
+#-----------------------------------------------------------------------------------------------------------------------------------|
 
 train_loader = DataLoaderLite(B=4, T=32)
 
