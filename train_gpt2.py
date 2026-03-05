@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import tiktoken # from openAI
+import time
 import sys
 
 class MLP(nn.Module):
@@ -237,12 +238,13 @@ if torch.cuda.is_available():
     device = 'cuda'
 elif hasattr(torch.backends,"mps") and torch.backends.mps.is_available():
     device = 'mps'
+print(f"using device: {device}")
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
   torch.manual.seed(1337)
 
-print(f"using device: {device}")
+
 
 # device = 'cpu' #override
 
@@ -259,7 +261,7 @@ print(f"using device: {device}")
 # y= buf[1:].view(B,T)                                                                                                              |
 #-----------------------------------------------------------------------------------------------------------------------------------|
 
-train_loader = DataLoaderLite(B=4, T=32)
+train_loader = DataLoaderLite(B=16, T=1024)
 
 #get logits
 model=GPT(GPTConfig())
@@ -271,13 +273,17 @@ model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
 for i in range(50):
+  t0 = time.time()
   x, y = train_loader.next_batch()
-  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU
-  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing
-  logits, loss = model(x, y)
-  loss.backward() #applies the gradients whenever there is a loss
-  optimizer.step() # update the parameters and decrease the loss
-  print(f"step {i}, loss : {loss.item()}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                  ---------------------|
+  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                             |      
+  logits, loss = model(x, y)                                                                                #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
+  loss.backward() #applies the gradients whenever there is a loss                                              |
+  optimizer.step() # update the parameters and decrease the loss                         ----------------------|
+  torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
+  t1 = time.time()
+  dt = (t1-t0)*1000 #time difference in milisecond
+  print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
 
