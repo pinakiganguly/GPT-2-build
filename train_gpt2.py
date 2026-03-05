@@ -242,7 +242,7 @@ print(f"using device: {device}")
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
-  torch.manual.seed(1337)
+  torch.manual_seed(1337)
 
 
 
@@ -261,7 +261,9 @@ if torch.cuda.is_available():
 # y= buf[1:].view(B,T)                                                                                                              |
 #-----------------------------------------------------------------------------------------------------------------------------------|
 
-train_loader = DataLoaderLite(B=16, T=1024)
+train_loader = DataLoaderLite(B=4, T=1024)
+
+torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
 
 #get logits
 model=GPT(GPTConfig())
@@ -283,7 +285,8 @@ for i in range(50):
   torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
   t1 = time.time()
   dt = (t1-t0)*1000 #time difference in milisecond
-  print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+  tokens_per_sec = (train_loader.B * train_loader.T)/(t1-t0)
+  print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
 
