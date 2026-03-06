@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from torch.cuda import is_available
 from transformers import GPT2LMHeadModel
 import math
+import os
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -268,6 +270,7 @@ torch.set_float32_matmul_precision('high') # --- we are going to do all the matr
 #get logits
 model=GPT(GPTConfig())
 model.to(device)
+model=torch.compile(model) #here python doesn't read line one by one, here the pytorch takes whole module at a time and compute it in 1 go, which makes the code to run more efficiently
 # logits, loss = model(x,y) # passing the labels as well to calculate the loss
 
 #Now we will perform the gradient and optimize the model and decrease the loss
@@ -278,7 +281,9 @@ for i in range(50):
   t0 = time.time()
   x, y = train_loader.next_batch()
   x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                  ---------------------|
-  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                             |      
+  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                             |
+  with torch.autocast(device_type=device, dtype=torch.bfloat16):                                            #  |
+    logits, loss = model(x, y)                                                                              #  |      
   logits, loss = model(x, y)                                                                                #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
   loss.backward() #applies the gradients whenever there is a loss                                              |
   optimizer.step() # update the parameters and decrease the loss                         ----------------------|
