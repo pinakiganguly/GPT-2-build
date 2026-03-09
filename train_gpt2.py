@@ -70,7 +70,7 @@ class CausalSelfAttention(nn.Module):    #Attention in LLM is generally what we 
 
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)  #here we are applying the Flash attention just to optimize the matrices. Also doing it explicitly for pytorch to see it as flash attention.
         #is_causal is the parameter which is used in gpt models just for masking and asking the models just to see the previous tokens and not thye future ones.
-        
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
@@ -272,7 +272,7 @@ train_loader = DataLoaderLite(B=2, T=1024)
 torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
 
 #get logits
-model=GPT(GPTConfig())
+model=GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model=torch.compile(model) #here python doesn't read line one by one, here the pytorch takes whole module at a time and compute it in 1 go, which makes the code to run more efficiently
 # logits, loss = model(x,y) # passing the labels as well to calculate the loss
