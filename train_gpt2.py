@@ -263,7 +263,7 @@ if torch.cuda.is_available():
 # y= buf[1:].view(B,T)                                                                                                              |
 #-----------------------------------------------------------------------------------------------------------------------------------|
 
-train_loader = DataLoaderLite(B=4, T=1024)
+train_loader = DataLoaderLite(B=2, T=1024)
 
 torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
 
