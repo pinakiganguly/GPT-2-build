@@ -62,11 +62,15 @@ class CausalSelfAttention(nn.Module):    #Attention in LLM is generally what we 
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) #here the masking is done so that the model cannot the see the future tokens, if so then it will be cheating and the model would not think of itself.
-        att = F.softmax(att, dim=-1) #this generally makes the probability of the raw scores, hence the probability distribution influences how each token influences the current token.
-        # att = self.attn_dropout(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs) --> then applying attention to values
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) #here the masking is done so that the model cannot the see the future tokens, if so then it will be cheating and the model would not think of itself.
+        # att = F.softmax(att, dim=-1) #this generally makes the probability of the raw scores, hence the probability distribution influences how each token influences the current token.
+        # # att = self.attn_dropout(att)
+        # y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs) --> then applying attention to values
+
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)  #here we are applying the Flash attention just to optimize the matrices. Also doing it explicitly for pytorch to see it as flash attention.
+        #is_causal is the parameter which is used in gpt models just for masking and asking the models just to see the previous tokens and not thye future ones.
+        
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
