@@ -279,23 +279,45 @@ model=torch.compile(model) #here python doesn't read line one by one, here the p
 
 #Now we will perform the gradient and optimize the model and decrease the loss
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+max_lr = 3e-4
+min_lr = max_lr * 0.1
+warmup_steps = 10
+max_steps = 50 
+def get_lr(it):   #defining the learning rate
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_steps:
+        return max_lr * (it+1) / warmup_steps
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > max_steps:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
+    return min_lr + coeff * (max_lr - min_lr)
 
-for i in range(50):
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95) , eps=1e-8)
+
+for step in range(max_steps):
   t0 = time.time()
   x, y = train_loader.next_batch()
-  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                  ---------------------|
-  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                             |
-  with torch.autocast(device_type=device, dtype=torch.bfloat16):                                            #  |
-    logits, loss = model(x, y)                                                                              #  |      
-  logits, loss = model(x, y)                                                                                #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
-  loss.backward() #applies the gradients whenever there is a loss                                              |
-  optimizer.step() # update the parameters and decrease the loss                         ----------------------|
+  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                           ---------------------|
+  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                                      |
+  with torch.autocast(device_type=device, dtype=torch.bfloat16):                                                     #  |
+    logits, loss = model(x, y)                                                                                       #  |      
+  logits, loss = model(x, y)                                                                                         #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
+  loss.backward() #applies the gradients whenever there is a loss                                                       |
+  norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) #used for stable training and prevent exploding gradients|
+  lr = get_lr(step)                                                                                                  #  |
+  for param_group in optimizer.param_groups:                                                                          # |
+    param_group['lr'] = lr                                                                                            # |
+  optimizer.step() # update the parameters and decrease the loss                                  ----------------------|
   torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
   t1 = time.time()
   dt = (t1-t0)*1000 #time difference in milisecond
   tokens_per_sec = (train_loader.B * train_loader.T)/(t1-t0)
-  print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+  print(f"step {step}| loss : {loss.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
 
