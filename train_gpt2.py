@@ -279,7 +279,7 @@ model=torch.compile(model) #here python doesn't read line one by one, here the p
 
 #Now we will perform the gradient and optimize the model and decrease the loss
 
-max_lr = 3e-4
+max_lr = 6e-4
 min_lr = max_lr * 0.1
 warmup_steps = 10
 max_steps = 50 
@@ -310,7 +310,7 @@ for step in range(max_steps):
   loss.backward() #applies the gradients whenever there is a loss                                                       |
   norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) #used for stable training and prevent exploding gradients|
   lr = get_lr(step)                                                                                                  #  |
-  for param_group in optimizer.param_groups:                                                                          # |
+  for param_group in optimizer.param_groups: #Here we are just setting the learning rate                                |
     param_group['lr'] = lr                                                                                            # |
   optimizer.step() # update the parameters and decrease the loss                                  ----------------------|
   torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
