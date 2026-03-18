@@ -265,12 +265,36 @@ class DataLoaderLite:
             self.current_position=0 #if we are just running out of data we can again reinitialize back to 0
         return x, y
 
-device = "cpu"
-if torch.cuda.is_available():
-    device = 'cuda'
-elif hasattr(torch.backends,"mps") and torch.backends.mps.is_available():
-    device = 'mps'
-print(f"using device: {device}")
+from torch.distributed import init_process_group, destroy_process_group
+# from torch.nn.parallel import DistributedDataParallel as DDP
+# import torch.distributed as dist
+
+# set up DDP (distributed data parallel).
+# torchrun command sets the env variables RANK, LOCAL_RANK, and WORLD_SIZE
+ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+if ddp:
+    # use of DDP atm demands CUDA, we set the device appropriately according to rank                               --------------------|
+    assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"                                                          #|
+    init_process_group(backend='nccl')                                                                                                #|
+    ddp_rank = int(os.environ['RANK']) #rank is used to rank the GPUs and to ensure that none of the GPUs get same sata for processing |
+    ddp_local_rank = int(os.environ['LOCAL_RANK']) #ranking each node in GPU where the data will be processed                          |
+    ddp_world_size = int(os.environ['WORLD_SIZE'])  #number GPUs that will be used for parallel processing                             |-----> This is only effective when you have multiple GPUs in your machine (here we took 8 GPUs to process in parallel)
+    device = f'cuda:{ddp_local_rank}' #to ensure there is no collisions between GPUs for each process.                                 |
+    torch.cuda.set_device(device)                                                                                                     #|
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.                                 -----------------|
+else:
+    # vanilla, non-DDP run
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    # attempt to autodetect device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    print(f"using device: {device}")
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
@@ -294,13 +318,19 @@ if torch.cuda.is_available():
 #-----------------------------------------------------------------------------------------------------------------------------------|
 
 total_batch_size = 524288 # 2**19 ~0.5M, in number of tokens
-B = 16
+B = 2
 T = 1024
-assert total_batch_size % (B*T) == 0 , "make sure total batch size is divisible by B*T"
-grad_accum_steps = total_batch_size // (B*T)
-print(f"Total desired batch size:{total_batch_size}")
-print(f"=> calculated  gradient  accumulation steps: {grad_accum_steps}")
-train_loader = DataLoaderLite(B=2, T=1024)
+assert total_batch_size % (B*T*ddp_world_size) == 0 , "make sure total batch size is divisible by B*T*ddp_world_size"
+grad_accum_steps = total_batch_size // (B*T*ddp_world_size)
+if master_process:
+  print(f"Total desired batch size:{total_batch_size}")
+  print(f"=> calculated  gradient  accumulation steps: {grad_accum_steps}")
+
+print("I am GPU:", ddp_rank)
+print("bye")
+import sys; sys.exit(0)
+
+train_loader = DataLoaderLite(B=B, T=T)
 
 torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
 
