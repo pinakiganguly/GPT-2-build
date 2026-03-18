@@ -335,13 +335,14 @@ optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, dev
 
 for step in range(max_steps):
   t0 = time.time()
-  x, y = train_loader.next_batch()
-  x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                           ---------------------|
-  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing                                      |
-  with torch.autocast(device_type=device, dtype=torch.bfloat16):                                                     #  |
-    logits, loss = model(x, y)                                                                                       #  |      
-  logits, loss = model(x, y)                                                                                         #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
-  loss.backward() #applies the gradients whenever there is a loss                                                       |
+  #                           
+  optimizer.zero_grad() #always initialize the gradients to zer before optlimizing #               ---------------------|
+  for micro_step in range(grad_accum_steps):  #  after accumulating the gradient for faster computation                 |
+    x, y = train_loader.next_batch()   #                                                                                |
+    x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                                              |
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):                                                   #  |
+      logits, loss = model(x, y)  #                                                                                     |
+    loss.backward() #applies the gradients whenever there is a loss                                                  #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
   norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) #used for stable training and prevent exploding gradients|
   lr = get_lr(step)                                                                                                  #  |
   for param_group in optimizer.param_groups: #Here we are just setting the learning rate                                |
