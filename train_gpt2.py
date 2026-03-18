@@ -293,6 +293,13 @@ if torch.cuda.is_available():
 # y= buf[1:].view(B,T)                                                                                                              |
 #-----------------------------------------------------------------------------------------------------------------------------------|
 
+total_batch_size = 524288 # 2**19 ~0.5M, in number of tokens
+B = 16
+T = 1024
+assert total_batch_size % (B*T) == 0 , "make sure total batch size is divisible by B*T"
+grad_accum_steps = total_batch_size // (B*T)
+print(f"Total desired batch size:{total_batch_size}")
+print(f"=> calculated  gradient  accumulation steps: {grad_accum_steps}")
 train_loader = DataLoaderLite(B=2, T=1024)
 
 torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
