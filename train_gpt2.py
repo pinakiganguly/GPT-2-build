@@ -335,13 +335,15 @@ optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, dev
 
 for step in range(max_steps):
   t0 = time.time()
-  #                           
+  loss_accum = 0.0                          
   optimizer.zero_grad() #always initialize the gradients to zer before optlimizing #               ---------------------|
   for micro_step in range(grad_accum_steps):  #  after accumulating the gradient for faster computation                 |
     x, y = train_loader.next_batch()   #                                                                                |
     x, y = x.to(device), y.to(device)  #transfering tokens from CPU to GPU                                              |
     with torch.autocast(device_type=device, dtype=torch.bfloat16):                                                   #  |
       logits, loss = model(x, y)  #                                                                                     |
+    loss = loss/grad_accum_steps # this is just accumulation of loss at every step                                      |
+    loss_accum+= loss.detach()  #   here we are finally calculating the total loss and finally detaching it from model  |
     loss.backward() #applies the gradients whenever there is a loss                                                  #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
   norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) #used for stable training and prevent exploding gradients|
   lr = get_lr(step)                                                                                                  #  |
@@ -352,7 +354,7 @@ for step in range(max_steps):
   t1 = time.time()
   dt = (t1-t0)*1000 #time difference in milisecond
   tokens_per_sec = (train_loader.B * train_loader.T)/(t1-t0)
-  print(f"step {step}| loss : {loss.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+  print(f"step {step}| loss : {loss_accum.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
 
