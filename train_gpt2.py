@@ -265,6 +265,7 @@ class DataLoaderLite:
             self.current_position=0 #if we are just running out of data we can again reinitialize back to 0
         return x, y
 
+# torchrun --standalone --nproc_per_node=8 train_gpt2.py
 from torch.distributed import init_process_group, destroy_process_group
 # from torch.nn.parallel import DistributedDataParallel as DDP
 # import torch.distributed as dist
