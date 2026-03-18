@@ -353,7 +353,7 @@ for step in range(max_steps):
   torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
   t1 = time.time()
   dt = (t1-t0)*1000 #time difference in milisecond
-  tokens_per_sec = (train_loader.B * train_loader.T)/(t1-t0)
+  tokens_per_sec = train_loader.B * train_loader.T * grad_accum_steps
   print(f"step {step}| loss : {loss_accum.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
