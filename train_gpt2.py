@@ -12,7 +12,9 @@ from torch.nn import functional as F
 import tiktoken # from openAI
 import time
 import sys
+from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -269,9 +271,7 @@ class DataLoaderLite:
         return x, y
 
 # torchrun --standalone --nproc_per_node=8 train_gpt2.py
-from torch.distributed import init_process_group, destroy_process_group
-# from torch.nn.parallel import DistributedDataParallel as DDP
-# import torch.distributed as dist
+
 
 # set up DDP (distributed data parallel).
 # torchrun command sets the env variables RANK, LOCAL_RANK, and WORLD_SIZE
@@ -380,7 +380,11 @@ for step in range(max_steps):
       logits, loss = model(x, y)  #                                                                                     |
     loss = loss/grad_accum_steps # this is just accumulation of loss at every step                                      |
     loss_accum+= loss.detach()  #   here we are finally calculating the total loss and finally detaching it from model  |
+    if ddp:                                                                                                          #  |
+      model.require_backward_grad_sync = (micro_step == grad_accum_steps -1)                                        #-- |-----> This is the accumulation of all loses/gradients from the various machines where the model runs during the backward process
     loss.backward() #applies the gradients whenever there is a loss                                                  #  |---> These are all the tasks that are being sent by CPU and are queued in GPU
+  if ddp:
+    dist.all_reduce(loss_accum,op=dist.ReduceOp.AVG)                                                                  #-|--> This is the ALLReduce that does the average of the gradients when we are using DDP just before the last backward step after all the accumulation is completed.
   norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) #used for stable training and prevent exploding gradients|
   lr = get_lr(step)                                                                                                  #  |
   for param_group in optimizer.param_groups: #Here we are just setting the learning rate                                |
@@ -389,11 +393,13 @@ for step in range(max_steps):
   torch.cuda.synchronize() #CPU sends instructions and schedules task in GPU, sometimes CPU doesn't track whether the task is completed by GPU, this line of code just make the task synchronized between CPU and GPU
   t1 = time.time()
   dt = (t1-t0)*1000 #time difference in milisecond
-  tokens_per_sec = train_loader.B * train_loader.T * grad_accum_steps
-  print(f"step {step}| loss : {loss_accum.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
+  tokens_per_sec = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
+  if master_process:
+    print(f"step {step}| loss : {loss_accum.item()}| lr:{lr:.4e} | norm:{norm: .4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}") #Here as we know loss is 1 d tensor & stored in GPU and convert it into float and store again to the CPU
 
 
-
+if ddp:
+  destroy_process_group()
 # print(loss)
 sys.exit(0)
 
