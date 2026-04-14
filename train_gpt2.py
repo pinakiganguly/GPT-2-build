@@ -12,6 +12,7 @@ from torch.nn import functional as F
 import tiktoken # from openAI
 import time
 import sys
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -238,9 +239,11 @@ class GPT(nn.Module):
 #-----------------------------------------------------------------------------------------------------
 
 class DataLoaderLite:
-    def __init__(self, B, T):
+    def __init__(self, B, T, process_rank, num_processes):
         self.B = B
         self.T = T
+        self.process_rank = process_rank
+        self.num_processes = num_processes
         with open('/content/GPT-2-build/input.txt','r') as f:
           text = f.read()
 
@@ -250,7 +253,7 @@ class DataLoaderLite:
         print(f"loaded {len(self.tokens)} tokens")
         print(f"l epoch = {len(self.tokens) // (B*T)} batches")
 
-        self.current_position=0
+        self.current_position= self.B * self.T * self.process_rank
 
         # get the shard filenames
     def next_batch(self):  #creating batches in B*T
@@ -259,10 +262,10 @@ class DataLoaderLite:
         x = (buf[:-1]).view(B, T) # inputs
         y = (buf[1:]).view(B, T) # targets   --- refer inputs and outputs cell in play.ipynb
         # advance the position in the tensor
-        self.current_position += B * T
+        self.current_position += B * T * self.num_processes #we are using num_processes because now we will use multiple GPUs which are again ranked for parallelization and so the data loader loads the data accordingly
         # if loading the next batch would be out of bounds, advance to next shard
-        if self.current_position + (B * T + 1) > len(self.tokens):   # --- refer inputs and outputs cell in play.ipynb
-            self.current_position=0 #if we are just running out of data we can again reinitialize back to 0
+        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):   # --- refer inputs and outputs cell in play.ipynb
+            self.current_position=self.B * self.T * self.process_rank #if we are just running out of data we can again reinitialize back to 0
         return x, y
 
 # torchrun --standalone --nproc_per_node=8 train_gpt2.py
@@ -277,7 +280,7 @@ if ddp:
     # use of DDP atm demands CUDA, we set the device appropriately according to rank                               --------------------|
     assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"                                                          #|
     init_process_group(backend='nccl')                                                                                                #|
-    ddp_rank = int(os.environ['RANK']) #rank is used to rank the GPUs and to ensure that none of the GPUs get same sata for processing |
+    ddp_rank = int(os.environ['RANK']) #rank is used to rank the GPUs and to ensure that none of the GPUs get same data for processing |
     ddp_local_rank = int(os.environ['LOCAL_RANK']) #ranking each node in GPU where the data will be processed                          |
     ddp_world_size = int(os.environ['WORLD_SIZE'])  #number GPUs that will be used for parallel processing                             |-----> This is only effective when you have multiple GPUs in your machine (here we took 8 GPUs to process in parallel)
     device = f'cuda:{ddp_local_rank}' #to ensure there is no collisions between GPUs for each process.                                 |
@@ -327,19 +330,21 @@ if master_process:
   print(f"Total desired batch size:{total_batch_size}")
   print(f"=> calculated  gradient  accumulation steps: {grad_accum_steps}")
 
-print("I am GPU:", ddp_rank)
-print("bye")
-import sys; sys.exit(0)
+# print("I am GPU:", ddp_rank)   |
+# print("bye")                   |-----> Just simulating to see how many GPUs are getting allocated and how the tasks are getting allocated.
+# import sys; sys.exit(0)        |
 
-train_loader = DataLoaderLite(B=B, T=T)
+train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size)
 
 torch.set_float32_matmul_precision('high') # --- we are going to do all the matrix multiplications using tensor float 32 in pytorch not float 32 that we were using before and will run tensor cores of GPU
 
-#get logits
+#creating model
 model=GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model=torch.compile(model) #here python doesn't read line one by one, here the pytorch takes whole module at a time and compute it in 1 go, which makes the code to run more efficiently
 # logits, loss = model(x,y) # passing the labels as well to calculate the loss
+if ddp:
+  model=DDP(model, device_ids=[ddp_local_rank])
 
 #Now we will perform the gradient and optimize the model and decrease the loss
 
